@@ -50,7 +50,7 @@ SKIP_NAMES = {"localhost", "localhost.localdomain", "broadcasthost"}
 # busy-GPU greens per terminal background: (pale, deep) 256-colour indices
 PALETTE = {
     "dark":  ("38;5;194", "1;38;5;28"),    # near-white mint  /  deep forest green
-    "light": ("38;5;157", "1;38;5;22"),    # soft mint        /  very dark green
+    "light": ("38;5;108", "1;38;5;22"),    # muted sage       /  very dark green
 }
 
 
