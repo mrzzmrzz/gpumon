@@ -261,7 +261,7 @@ def gb(mib):
     return mib / 1024.0
 
 
-def render(results, st, args, elapsed, view=None):
+def render(results, st, args, status, view=None):
     """Build the frame. `view` = (offset, rows) limits node lines to the terminal."""
     lines = []
     busy = free = bad = missing = down = 0
@@ -271,6 +271,9 @@ def render(results, st, args, elapsed, view=None):
 
     for name, (host, gpus, err) in zip(names, results):
         label = st.bold(name.ljust(width))
+        if err == "probing":
+            lines.append(f"  {label}  {st.dim('…')}")
+            continue
         if err:
             down += 1
             lines.append(f"  {label}  {st.bred('✕')}  {st.red(err)}")
@@ -305,7 +308,7 @@ def render(results, st, args, elapsed, view=None):
         lines.append(f"  {label}  {' '.join(dots)}   {n_busy}/{slots}  {detail}")
 
     stamp = time.strftime("%H:%M:%S")
-    title = f"  {st.bold('gpumon')}  {st.dim(f'{len(results)} nodes · {stamp} · {elapsed:.1f}s')}"
+    title = f"  {st.bold('gpumon')}  {st.dim(f'{len(results)} nodes · {stamp} · {status}')}"
     colhdr = "  " + " " * width + "  " + st.dim(" ".join(str(i % 10) for i in range(slots)))
     summary = f"  {st.idle('○')} {free} free   {st.green('●')} {busy} busy"
     if bad:
@@ -464,61 +467,105 @@ class Screen:
             termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self.saved)
 
 
-class Poller:
-    """Probes the cluster on a background thread so the UI never blocks."""
-
-    def __init__(self, hosts, args):
-        import threading
-        self.hosts, self.args = hosts, args
-        self.results, self.elapsed, self.version = [], 0.0, 0
-        self.wake = threading.Event()
-        self.stop = threading.Event()
-        self.thread = threading.Thread(target=self.run, daemon=True)
-
-    def run(self):
-        while not self.stop.is_set():
-            t0 = time.time()
-            results = parallel(probe_gpus, self.hosts, self.args)
-            self.results, self.elapsed = results, time.time() - t0
-            self.version += 1
-            self.wake.wait(self.args.watch)
-            self.wake.clear()
-
-    def refresh_now(self):
-        self.wake.set()
+MUX_PATH = None
 
 
 def enable_ssh_multiplexing(persist):
     """Reuse one ssh connection per host across refreshes (no handshake, no sshd login per poll)."""
+    global MUX_PATH
     import tempfile
     d = os.path.join(tempfile.gettempdir(), f"gpumon-{os.getuid()}")
     os.makedirs(d, mode=0o700, exist_ok=True)
-    SSH_OPTS.extend(["-o", "ControlMaster=auto", "-o", f"ControlPath={d}/%C",
-                     "-o", f"ControlPersist={int(persist)}"])
+    MUX_PATH = f"{d}/%C"
+    SSH_OPTS.extend(["-o", "ControlMaster=auto", "-o", f"ControlPath={MUX_PATH}",
+                     "-o", f"ControlPersist={int(persist)}",
+                     "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2"])
+
+
+def reset_ssh_master(host):
+    """Drop a host's multiplexed connection so the next probe reconnects from scratch."""
+    if MUX_PATH and host not in local_names():
+        try:
+            subprocess.run(["ssh", "-O", "exit", "-o", f"ControlPath={MUX_PATH}", host],
+                           capture_output=True, timeout=3)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+
+class Poller:
+    """Probes every host on its own cadence in the background.
+
+    A host that fails briefly keeps showing its last good reading; it is only
+    marked down after failing continuously for `grace` seconds."""
+
+    def __init__(self, hosts, args):
+        import threading
+        self.hosts, self.args = hosts, args
+        self.grace = max(15.0, args.watch * 5)
+        self.state = {h: {"gpus": {}, "err": "probing", "good_at": 0.0} for h in hosts}
+        self.version = 0
+        self.stop = threading.Event()
+        self.wake = {h: threading.Event() for h in hosts}
+        self.slots = threading.Semaphore(args.jobs)
+        self.threads = [threading.Thread(target=self.run_host, args=(h,), daemon=True) for h in hosts]
+
+    def start(self):
+        for t in self.threads:
+            t.start()
+
+    def run_host(self, host):
+        st, wake = self.state[host], self.wake[host]
+        while not self.stop.is_set():
+            t0 = time.time()
+            with self.slots:
+                _, gpus, err = probe_gpus(host, self.args.timeout)
+            if err:
+                st["err"] = err
+                if err == "timeout":
+                    reset_ssh_master(host)
+            else:
+                st.update(gpus=gpus, err=None, good_at=time.time())
+            self.version += 1
+            wake.wait(max(0.0, self.args.watch - (time.time() - t0)))
+            wake.clear()
+
+    def refresh_now(self):
+        for e in self.wake.values():
+            e.set()
+
+    def snapshot(self):
+        """(host, gpus, err) rows for the renderer, tolerant of short outages."""
+        now, rows = time.time(), []
+        for h in self.hosts:
+            st = self.state[h]
+            if st["err"] is None or (st["gpus"] and now - st["good_at"] < self.grace):
+                rows.append((h, st["gpus"], None))
+            else:
+                rows.append((h, {}, st["err"]))
+        return rows
+
+    @property
+    def ready(self):
+        return any(st["err"] != "probing" for st in self.state.values())
 
 
 def watch(hosts, args, st):
     enable_ssh_multiplexing(persist=max(10, args.watch * 3))
     poller = Poller(hosts, args)
-    poller.thread.start()
-    if not st.on:                                   # piped: just print frames
-        seen = 0
-        while True:
-            if poller.version != seen:
-                seen = poller.version
-                print(render(poller.results, st, args, poller.elapsed), flush=True)
-            time.sleep(0.2)
-
+    poller.start()
+    status = f"every {args.watch:g}s"
     with Screen(True):
         inp = Input()
         fixed = bool(args.theme or os.environ.get("GPUMON_THEME"))
         offset, seen, size, theme, next_poll, quit_ = 0, -1, None, None, 0.0, False
+        rows, page = [], 1
         while not quit_:
             now_size = shutil.get_terminal_size()
             if poller.version != seen or size != now_size or st.theme != theme:
                 seen, size, theme = poller.version, now_size, st.theme
-                if poller.results:
-                    frame, page = render(poller.results, st, args, poller.elapsed, view=(offset, size.lines))
+                if poller.ready:
+                    rows = poller.snapshot()
+                    frame, page = render(rows, st, args, status, view=(offset, size.lines))
                 else:
                     frame, page = "\033[H\033[2J  " + st.dim("probing…"), 1
                 print(frame, end="", flush=True)
@@ -538,11 +585,10 @@ def watch(hosts, args, st):
                 else:
                     step = {"down": 1, "up": -1, "pagedown": page, "pageup": -page,
                             "top": -10 ** 9, "bottom": 10 ** 9}[val]
-                    offset = max(0, min(offset + step, max(0, len(poller.results) - page)))
-                    frame, page = render(poller.results, st, args, poller.elapsed, view=(offset, size.lines))
+                    offset = max(0, min(offset + step, max(0, len(rows) - page)))
+                    frame, page = render(rows, st, args, status, view=(offset, size.lines))
                     print(frame, end="", flush=True)
     poller.stop.set()
-    poller.refresh_now()
     os._exit(0)                                     # do not wait for in-flight ssh probes
 
 
@@ -703,7 +749,7 @@ def main():
         if not args.watch:
             t0 = time.time()
             results = parallel(probe_gpus, hosts, args)
-            print(render(results, st, args, time.time() - t0), flush=True)
+            print(render(results, st, args, f"{time.time() - t0:.1f}s"), flush=True)
             return
         watch(hosts, args, st)
     except KeyboardInterrupt:

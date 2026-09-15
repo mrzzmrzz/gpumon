@@ -78,8 +78,12 @@ gpumon deploy          # install gpumon + the node list on every cached node
 | `r` | refresh now |
 | `q` | quit |
 
-Probing runs on a background thread, so keys work at any time, including
-while a refresh is in flight.
+Every node is probed on its own background loop, so a slow node never holds
+up the others and keys work at any time. A node that fails a probe keeps
+showing its last good reading; it is marked down only after failing
+continuously for about 15 seconds (five refresh intervals if that is longer).
+A probe that times out drops that node's multiplexed ssh connection so the
+next one reconnects from scratch.
 
 ## Installing on the whole cluster
 
