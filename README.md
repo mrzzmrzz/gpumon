@@ -20,15 +20,17 @@ A minimal cluster GPU overview over SSH. One line per node, one circle per GPU.
 
 | symbol | meaning |
 |---|---|
-| **○** dim | GPU idle |
-| **●** pale green | GPU in use, under 50% utilisation |
-| **●** deep green | GPU in use, 50% utilisation or more |
+| **○** grey | GPU idle |
+| **●** green | GPU in use, under 50% utilisation |
+| **●** bright / dark green | GPU in use, 50% utilisation or more |
 | **●** red | GPU faulty (no telemetry, uncorrected ECC errors, driver error) |
 | **✕** red | GPU slot missing, or node unreachable |
 
-The two greens are tuned separately for dark and light terminals. The
-background is detected automatically (OSC 11 query, then `COLORFGBG`); force
-it with `--theme dark` or `--theme light`.
+Busy GPUs use one green hue at two lightness levels: on a dark terminal the
+busier GPU is the brighter one, on a light terminal it is the darker one. The
+background is detected automatically (OSC 11 query, then `COLORFGBG`). If
+your terminal does not answer, set it once with `export GPUMON_THEME=light`
+or pass `--theme light`.
 
 Each column is a physical GPU ID, so a broken card shows up in its own slot.
 

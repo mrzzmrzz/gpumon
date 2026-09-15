@@ -47,10 +47,11 @@ SKIP_NAMES = {"localhost", "localhost.localdomain", "broadcasthost"}
 
 # ---------------------------------------------------------------- colours --
 
-# busy-GPU greens per terminal background: (pale, deep) 256-colour indices
-PALETTE = {
-    "dark":  ("38;5;194", "1;38;5;28"),    # near-white mint  /  deep forest green
-    "light": ("38;5;108", "1;38;5;22"),    # muted sage       /  very dark green
+# One green hue, two lightness levels, plus a neutral grey for idle.
+# Chosen so that either palette stays readable if the background is misdetected.
+PALETTE = {                     # idle        low (<50%)    high (>=50%)
+    "dark":  ("38;5;240", "38;5;71",  "1;38;5;40"),   # grey / #5faf5f / #00d700
+    "light": ("38;5;250", "38;5;71",  "1;38;5;22"),   # grey / #5faf5f / #005f00
 }
 
 
@@ -60,14 +61,14 @@ class Style:
         term = os.environ.get("TERM", "")
         self.c256 = "256color" in term or "truecolor" in os.environ.get("COLORTERM", "").lower()
         self.theme = theme
-        self.pale, self.deep = PALETTE[theme]
+        self.grey, self.pale, self.deep = PALETTE[theme]
 
     def _c(self, code, s):
         return f"\033[{code}m{s}\033[0m" if self.on else str(s)
 
     def green(self, s):  return self._c(self.pale if self.c256 else "2;32", s)
     def bgreen(self, s): return self._c(self.deep if self.c256 else "1;32", s)
-    def idle(self, s):   return self._c("2;32", s)
+    def idle(self, s):   return self._c(self.grey if self.c256 else "2;37", s)
     def busy(self, util, s):
         return self.bgreen(s) if util >= 50 else self.green(s)
     def red(self, s):    return self._c("31", s)
@@ -337,8 +338,10 @@ def render(results, st, args, elapsed, view=None):
 
 # ------------------------------------------------------------------- theme --
 
-def detect_theme(timeout=0.25):
+def detect_theme(timeout=0.4):
     """Return 'dark' or 'light' for the terminal background."""
+    if os.environ.get("GPUMON_THEME") in ("dark", "light"):
+        return os.environ["GPUMON_THEME"]
     fgbg = os.environ.get("COLORFGBG", "")
     if ";" in fgbg:
         bg = fgbg.rsplit(";", 1)[1]
@@ -511,7 +514,7 @@ def parse_args():
     p.add_argument("-a", "--anon", action="store_true",
                    help="number nodes 001, 002, ... instead of showing hostnames")
     p.add_argument("--theme", choices=["dark", "light"],
-                   help="terminal background (default: auto-detected)")
+                   help="terminal background (default: auto-detect, or $GPUMON_THEME)")
     p.add_argument("--no-color", action="store_true")
     return p.parse_args()
 
