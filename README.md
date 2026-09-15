@@ -28,13 +28,17 @@ Each column is a physical GPU ID, so a broken card shows up in its own slot.
 
 ## Install
 
-Single file, Python 3.8+, standard library only. Needs `ssh` locally and
-`nvidia-smi` on the nodes.
+One line, no clone:
 
 ```sh
-git clone https://github.com/mrzzmrzz/server-monitor.git
-ln -s "$PWD/server-monitor/gpumon.py" ~/.local/bin/gpumon
+curl -fsSL https://raw.githubusercontent.com/mrzzmrzz/server-monitor/main/install.sh | sh
 ```
+
+This puts a single executable at `~/.local/bin/gpumon` (set `GPUMON_BIN` to
+change it). Python 3.8+ with the standard library is all it needs, plus `ssh`
+locally and `nvidia-smi` on the nodes.
+
+To update, run the same line again. To remove, delete the file.
 
 ## Usage
 
