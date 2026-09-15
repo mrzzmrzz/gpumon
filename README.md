@@ -51,13 +51,26 @@ To update, run the same line again. To remove, delete the file.
 ```sh
 gpumon discover        # find nodes once, cache them
 gpumon                 # show the cluster
-gpumon -w 5            # live view: redraws in place, j/k scroll, q quit
+gpumon -w 5            # live view, redraws in place
 gpumon --temps         # add the hottest GPU of each node
 gpumon -a              # number nodes 001, 002, ... instead of hostnames
 gpumon --theme light   # force the light-background palette
 gpumon -p 'gpu-\d+'    # only hosts matching a regex
 gpumon hosts           # print the cached node list
 ```
+
+## Keys in live view
+
+| key | action |
+|---|---|
+| `j` / `k`, arrows | scroll one node |
+| `space`, PgDn / PgUp | scroll one page |
+| `g` / `G` | top / bottom |
+| `r` | refresh now |
+| `q` | quit |
+
+Probing runs on a background thread, so keys work at any time, including
+while a refresh is in flight.
 
 ## How nodes are discovered
 

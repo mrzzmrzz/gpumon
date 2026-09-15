@@ -329,7 +329,7 @@ def render(results, st, args, elapsed, view=None):
         per_page = max(1, per_page - 1)                  # room for the scroll hint
         offset = max(0, min(offset, len(lines) - per_page))
         page = lines[offset:offset + per_page]
-        page.append(st.dim(f"  ↑ {offset}  ↓ {len(lines) - offset - per_page}   j/k scroll · q quit"))
+        page.append(st.dim(f"  ↑ {offset}  ↓ {len(lines) - offset - per_page}   j/k · space · g/G · q"))
     else:
         page = lines
     return "\033[H" + "\033[K\n".join(head + page + foot) + "\033[K\033[J", per_page
@@ -376,54 +376,114 @@ def detect_theme(timeout=0.25):
 # ------------------------------------------------------------------ screen --
 
 class Screen:
-    """Alternate screen buffer with hidden cursor, restored on exit."""
+    """Alternate screen, hidden cursor, keys delivered immediately. Restored on exit."""
 
     def __init__(self, enabled):
         self.on = enabled
+        self.saved = None
 
     def __enter__(self):
         if self.on:
+            import termios
+            import tty
+            fd = sys.stdin.fileno()
+            self.saved = termios.tcgetattr(fd)
+            tty.setcbreak(fd)                      # no line buffering, no echo, for the whole session
             sys.stdout.write("\033[?1049h\033[?25l\033[H\033[2J")
             sys.stdout.flush()
         return self
 
     def __exit__(self, *exc):
         if self.on:
+            import termios
             sys.stdout.write("\033[?25h\033[?1049l")
             sys.stdout.flush()
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self.saved)
 
 
-def wait_key(seconds):
-    """Sleep up to `seconds`; return 'quit', 'up', 'down', 'top', 'bottom', 'refresh' or None."""
-    if not sys.stdin.isatty():
-        time.sleep(seconds)
-        return None
+KEYS = {"q": "quit", "Q": "quit", "\x03": "quit",
+        "j": "down", "\x1b[B": "down", "k": "up", "\x1b[A": "up",
+        " ": "pagedown", "\x1b[6~": "pagedown", "\x1b[5~": "pageup",
+        "g": "top", "G": "bottom", "r": "refresh"}
+
+
+def read_key(timeout):
+    """Wait up to `timeout` for a key; return its action name or None."""
     import select
-    import termios
-    import tty
     fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    keys = {"q": "quit", "Q": "quit", "\x03": "quit", "j": "down", "k": "up",
-            "\x1b[B": "down", "\x1b[A": "up", "g": "top", "G": "bottom", "r": "refresh", " ": "refresh"}
-    try:
-        tty.setcbreak(fd)
-        deadline = time.time() + seconds
+    r, _, _ = select.select([fd], [], [], timeout)
+    if not r:
+        return None
+    ch = os.read(fd, 1).decode(errors="ignore")
+    if ch == "\x1b":                              # escape sequence: read the rest if it is there
+        r, _, _ = select.select([fd], [], [], 0.05)
+        if r:
+            ch += os.read(fd, 8).decode(errors="ignore")
+    return KEYS.get(ch)
+
+
+class Poller:
+    """Probes the cluster on a background thread so the UI never blocks."""
+
+    def __init__(self, hosts, args):
+        import threading
+        self.hosts, self.args = hosts, args
+        self.results, self.elapsed, self.version = [], 0.0, 0
+        self.wake = threading.Event()
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self.run, daemon=True)
+
+    def run(self):
+        while not self.stop.is_set():
+            t0 = time.time()
+            results = parallel(probe_gpus, self.hosts, self.args)
+            self.results, self.elapsed = results, time.time() - t0
+            self.version += 1
+            self.wake.wait(self.args.watch)
+            self.wake.clear()
+
+    def refresh_now(self):
+        self.wake.set()
+
+
+def watch(hosts, args, st):
+    poller = Poller(hosts, args)
+    poller.thread.start()
+    if not st.on:                                   # piped: just print frames
+        seen = 0
         while True:
-            left = deadline - time.time()
-            if left <= 0:
-                return None
-            r, _, _ = select.select([sys.stdin], [], [], left)
-            if not r:
-                return None
-            ch = sys.stdin.read(1)
-            if ch == "\x1b":
-                r, _, _ = select.select([sys.stdin], [], [], 0.05)
-                if r:
-                    ch += sys.stdin.read(2)
-            if ch in keys:
-                return keys[ch]
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            if poller.version != seen:
+                seen = poller.version
+                print(render(poller.results, st, args, poller.elapsed), flush=True)
+            time.sleep(0.2)
+
+    with Screen(True):
+        offset, seen, size = 0, -1, None
+        while True:
+            now_size = shutil.get_terminal_size()
+            if poller.version != seen or size != now_size:
+                seen, size = poller.version, now_size
+                if poller.results:
+                    frame, page = render(poller.results, st, args, poller.elapsed, view=(offset, size.lines))
+                else:
+                    frame, page = "\033[H\033[2J  " + st.dim("probing…"), 1
+                print(frame, end="", flush=True)
+            key = read_key(0.2)
+            if key is None:
+                continue
+            if key == "quit":
+                break
+            if key == "refresh":
+                poller.refresh_now()
+                continue
+            step = {"down": 1, "up": -1, "pagedown": page, "pageup": -page,
+                    "top": -10 ** 9, "bottom": 10 ** 9}[key]
+            offset = max(0, min(offset + step, max(0, len(poller.results) - page)))
+            frame, page = render(poller.results, st, args, poller.elapsed, view=(offset, size.lines))
+            print(frame, end="", flush=True)
+    poller.stop.set()
+    poller.refresh_now()
+    os._exit(0)                                     # do not wait for in-flight ssh probes
 
 
 # ------------------------------------------------------------------- main --
@@ -517,26 +577,7 @@ def main():
             results = parallel(probe_gpus, hosts, args)
             print(render(results, st, args, time.time() - t0), flush=True)
             return
-        with Screen(st.on):
-            offset = 0
-            while True:
-                t0 = time.time()
-                results = parallel(probe_gpus, hosts, args)
-                elapsed = time.time() - t0
-                while True:
-                    if st.on:
-                        rows = shutil.get_terminal_size().lines
-                        frame, step = render(results, st, args, elapsed, view=(offset, rows))
-                        print(frame, end="", flush=True)
-                    else:
-                        print(render(results, st, args, elapsed), flush=True)
-                    key = wait_key(args.watch)
-                    if key == "quit":
-                        return
-                    if key in (None, "refresh"):
-                        break
-                    offset = {"up": offset - step, "down": offset + step, "top": 0, "bottom": 10 ** 9}[key]
-                    offset = max(0, offset)
+        watch(hosts, args, st)
     except KeyboardInterrupt:
         print()
 
