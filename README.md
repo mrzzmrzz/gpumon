@@ -5,14 +5,14 @@ A minimal cluster GPU overview over SSH. One line per node, one circle per GPU.
 ```
   gpumon  57 nodes · 12:13:19 · 0.8s
 
-           0 1 2 3 4 5 6 7
+       0 1 2 3 4 5 6 7
 
-  node011  ● ● ● ● ○ ○ ○ ○   4/8   47%    18/640 GB
-  node014  ○ ○ ○ ○ ○ ○ ○ ○   0/8    0%     0/640 GB
-  node020  ● ● ● ● ○ ● ○ ●   6/8    0%   232/640 GB
-  node025  ● ● ● ● ● ● ● ●   8/8   91%   487/640 GB
-  node114  ○ ○ ○ ○ ○ ● ○ ○   0/8    0%     0/560 GB   gpu5: unknown error
-  node117  ✕  unreachable
+  001  ● ● ● ● ○ ○ ○ ○   4/8   47%    18/640 GB
+  002  ○ ○ ○ ○ ○ ○ ○ ○   0/8    0%     0/640 GB
+  003  ● ● ● ● ○ ● ○ ●   6/8    0%   232/640 GB
+  004  ● ● ● ● ● ● ● ●   8/8   91%   487/640 GB
+  005  ○ ○ ○ ○ ○ ● ○ ○   0/8    0%     0/560 GB   gpu5: unknown error
+  006  ✕  unreachable
 
   ● 27 busy   ○ 20 free   ● 1 faulty   ✕ 1 nodes down
 ```
@@ -47,7 +47,8 @@ gpumon discover        # find nodes once, cache them
 gpumon                 # show the cluster
 gpumon -w 5            # refresh every 5 seconds
 gpumon --temps         # add the hottest GPU of each node
-gpumon -p 'node1\d+'   # only some nodes
+gpumon -a              # number nodes 001, 002, ... instead of hostnames
+gpumon -p 'gpu-\d+'    # only hosts matching a regex
 gpumon hosts           # print the cached node list
 ```
 

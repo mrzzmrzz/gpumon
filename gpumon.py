@@ -246,11 +246,12 @@ def gb(mib):
 def render(results, st, args, elapsed):
     lines = []
     busy = free = bad = missing = down = 0
-    width = max((len(h) for h, _, _ in results), default=4)
+    names = [f"{i:03d}" for i in range(1, len(results) + 1)] if args.anon else [h for h, _, _ in results]
+    width = max((len(n) for n in names), default=4)
     slots = args.gpus or max((max(g) + 1 for _, g, e in results if not e), default=8)
 
-    for host, gpus, err in results:
-        label = st.bold(host.ljust(width))
+    for name, (host, gpus, err) in zip(names, results):
+        label = st.bold(name.ljust(width))
         if err:
             down += 1
             lines.append(f"  {label}  {st.bred('✕')}  {st.red(err)}")
@@ -326,6 +327,8 @@ def parse_args():
                    help="utilisation above which a GPU is busy (default 5)")
     p.add_argument("--temps", action="store_true", help="show hottest GPU per node")
     p.add_argument("--hot", type=int, default=80, help="temperature to highlight (°C)")
+    p.add_argument("-a", "--anon", action="store_true",
+                   help="number nodes 001, 002, ... instead of showing hostnames")
     p.add_argument("--no-color", action="store_true")
     return p.parse_args()
 
