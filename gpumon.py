@@ -338,8 +338,11 @@ def render(results, st, args, elapsed, view=None):
 
 # ------------------------------------------------------------------- theme --
 
-def detect_theme(timeout=0.4):
-    """Return 'dark' or 'light' for the terminal background."""
+def detect_theme(timeout=1.5):
+    """Return 'dark' or 'light' for the terminal background.
+
+    The OSC 11 round trip goes through ssh, so allow a generous window;
+    it returns as soon as the terminal answers, so a fast link costs nothing."""
     if os.environ.get("GPUMON_THEME") in ("dark", "light"):
         return os.environ["GPUMON_THEME"]
     fgbg = os.environ.get("COLORFGBG", "")
