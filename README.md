@@ -3,15 +3,15 @@
 A minimal cluster GPU overview over SSH. One line per node, one circle per GPU.
 
 ```
-  gpumon  57 nodes · 12:13:19 · 0.8s
+  gpumon  24 nodes · 09:41:07 · 0.9s
 
        0 1 2 3 4 5 6 7
 
-  001  ● ● ● ● ○ ○ ○ ○   4/8   47%    18/640 GB
-  002  ○ ○ ○ ○ ○ ○ ○ ○   0/8    0%     0/640 GB
-  003  ● ● ● ● ○ ● ○ ●   6/8    0%   232/640 GB
-  004  ● ● ● ● ● ● ● ●   8/8   91%   487/640 GB
-  005  ○ ○ ○ ○ ○ ● ○ ○   0/8    0%     0/560 GB
+  001  ● ● ● ● ○ ○ ○ ○   4/8   47%    18/192 GB
+  002  ○ ○ ○ ○ ○ ○ ○ ○   0/8    0%     0/192 GB
+  003  ● ● ● ● ○ ● ○ ●   6/8    0%    71/192 GB
+  004  ● ● ● ● ● ● ● ●   8/8   91%   146/192 GB
+  005  ○ ○ ○ ○ ○ ● ○ ○   0/8    0%     0/168 GB
   006  ✕  unreachable
 
   ○ 20 free   ● 27 busy   ● 1 faulty   ✕ 1 nodes down
@@ -117,10 +117,11 @@ file.
 Each refresh runs one `nvidia-smi` query per node over ssh, in parallel. In
 the live view ssh connections are multiplexed (`ControlMaster`), so after the
 first refresh there is no key exchange and no new sshd login on the nodes per
-poll; the masters exit by themselves shortly after you quit. On a 57-node
-cluster a refresh takes about a second of wall time and well under half a
-CPU-second on the login node. The remote query costs each node roughly 0.1 s
-of system time. The refresh interval is clamped to at least 1 s.
+poll; the masters exit by themselves shortly after you quit. As a rough
+guide, on a cluster of around 50 nodes a refresh takes about a second of wall
+time and well under half a CPU-second on the machine running gpumon. The
+remote query costs each node about a tenth of a second of system time. The
+refresh interval is clamped to at least 1 s.
 
 ## What counts as busy
 
