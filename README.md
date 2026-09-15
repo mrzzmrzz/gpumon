@@ -11,7 +11,7 @@ A minimal cluster GPU overview over SSH. One line per node, one circle per GPU.
   002  ○ ○ ○ ○ ○ ○ ○ ○   0/8    0%     0/640 GB
   003  ● ● ● ● ○ ● ○ ●   6/8    0%   232/640 GB
   004  ● ● ● ● ● ● ● ●   8/8   91%   487/640 GB
-  005  ○ ○ ○ ○ ○ ● ○ ○   0/8    0%     0/560 GB   gpu5: unknown error
+  005  ○ ○ ○ ○ ○ ● ○ ○   0/8    0%     0/560 GB
   006  ✕  unreachable
 
   ○ 20 free   ● 27 busy   ● 1 faulty   ✕ 1 nodes down

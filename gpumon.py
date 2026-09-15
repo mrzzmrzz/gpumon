@@ -274,18 +274,16 @@ def render(results, st, args, elapsed, view=None):
             lines.append(f"  {label}  {st.bred('✕')}  {st.red(err)}")
             continue
 
-        dots, notes = [], []
+        dots = []
         n_busy = used_sum = tot_sum = util_sum = n_ok = 0
         for i in range(slots):
             g = gpus.get(i)
             if g is None:
                 missing += 1
                 dots.append(st.bred("✕"))
-                notes.append(st.red(f"gpu{i}: missing"))
             elif g["fault"]:
                 bad += 1
                 dots.append(st.bred("●"))
-                notes.append(st.red(f"gpu{i}: {g['fault']}"))
             else:
                 n_ok += 1
                 used_sum += g["used"]; tot_sum += g["total"]; util_sum += g["util"]
@@ -302,8 +300,6 @@ def render(results, st, args, elapsed, view=None):
             if temps:
                 hi = max(temps)
                 detail += "  " + (st.yellow(f"{hi}°C") if hi >= args.hot else st.dim(f"{hi}°C"))
-        if notes:
-            detail += "  " + "  ".join(notes)
         lines.append(f"  {label}  {' '.join(dots)}   {n_busy}/{slots}  {detail}")
 
     stamp = time.strftime("%H:%M:%S")
