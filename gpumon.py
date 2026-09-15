@@ -46,9 +46,28 @@ SKIP_NAMES = {"localhost", "localhost.localdomain", "broadcasthost"}
 
 # ---------------------------------------------------------------- colours --
 
+# utilisation ramp: pale -> saturated green. (truecolor rgb, 256-colour fallback)
+RAMP = [((150, 200, 150), 151),
+        ((110, 210, 110), 114),
+        ((70, 220, 70), 77),
+        ((30, 235, 30), 40),
+        ((0, 255, 0), 46)]
+
+
 class Style:
     def __init__(self, enabled):
         self.on = enabled
+        self.truecolor = os.environ.get("COLORTERM", "").lower() in ("truecolor", "24bit")
+
+    def level(self, util, s):
+        """Colour `s` by utilisation 0..100 along the green ramp."""
+        i = min(len(RAMP) - 1, max(0, (util * len(RAMP)) // 101))
+        rgb, idx = RAMP[i]
+        code = "1;38;2;%d;%d;%d" % rgb if self.truecolor else f"1;38;5;{idx}"
+        return self._c(code, s)
+
+    def ramp(self):
+        return " ".join(self.level(u, "●") for u in (0, 25, 50, 75, 100))
 
     def _c(self, code, s):
         return f"\033[{code}m{s}\033[0m" if self.on else str(s)
@@ -274,10 +293,10 @@ def render(results, st, args, elapsed):
                 used_sum += g["used"]; tot_sum += g["total"]; util_sum += g["util"]
                 if g["used"] >= args.mem_threshold or g["util"] >= args.util_threshold:
                     busy += 1; n_busy += 1
-                    dots.append(st.bgreen("●"))
+                    dots.append(st.level(g["util"], "●"))
                 else:
                     free += 1
-                    dots.append(st.green("○"))
+                    dots.append(st.dim(st.green("○")))
 
         detail = st.dim(f"{util_sum // n_ok:3d}%  {gb(used_sum):4.0f}/{gb(tot_sum):.0f} GB") if n_ok else ""
         if args.temps:
@@ -294,14 +313,15 @@ def render(results, st, args, elapsed):
     out += ["", f"  {st.bold('gpumon')}  {st.dim(f'{len(results)} nodes · {stamp} · {elapsed:.1f}s')}", ""]
     out += ["  " + " " * width + "  " + st.dim(" ".join(str(i % 10) for i in range(slots))), ""]
     out += lines
-    summary = f"  {st.bgreen('●')} {busy} busy   {st.green('○')} {free} free"
+    summary = f"  {st.dim(st.green('○'))} {free} free   {st.level(100, '●')} {busy} busy"
     if bad:
         summary += f"   {st.bred('●')} {bad} faulty"
     if missing:
         summary += f"   {st.bred('✕')} {missing} missing"
     if down:
         summary += f"   {st.bred('✕')} {down} nodes down"
-    out += ["", summary, ""]
+    legend = f"  {st.dim('util')} {st.ramp()} {st.dim('0 → 100%')}"
+    out += ["", summary, legend, ""]
     if args.watch and st.on:
         # redraw in place: home, overwrite each line, wipe whatever is left below
         return "\033[H" + "\033[K\n".join(out) + "\033[K\033[J"

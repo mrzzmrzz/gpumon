@@ -14,15 +14,20 @@ A minimal cluster GPU overview over SSH. One line per node, one circle per GPU.
   005  ○ ○ ○ ○ ○ ● ○ ○   0/8    0%     0/560 GB   gpu5: unknown error
   006  ✕  unreachable
 
-  ● 27 busy   ○ 20 free   ● 1 faulty   ✕ 1 nodes down
+  ○ 20 free   ● 27 busy   ● 1 faulty   ✕ 1 nodes down
+  util ● ● ● ● ● 0 → 100%
 ```
 
 | symbol | meaning |
 |---|---|
-| **●** green | GPU in use |
-| **○** green | GPU idle |
+| **○** dim green | GPU idle |
+| **●** green | GPU in use, colour follows utilisation: pale = low, saturated = high |
 | **●** red | GPU faulty (no telemetry, uncorrected ECC errors, driver error) |
 | **✕** red | GPU slot missing, or node unreachable |
+
+The green ramp has five steps from 0% to 100%, shown in the footer. Terminals
+that advertise `COLORTERM=truecolor` get smooth RGB, others fall back to the
+256-colour palette.
 
 Each column is a physical GPU ID, so a broken card shows up in its own slot.
 
