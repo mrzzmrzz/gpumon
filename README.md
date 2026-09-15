@@ -99,6 +99,16 @@ file.
 
 `-H host1 host2` and `-f hosts.txt` bypass the cache for one-off checks.
 
+## Cost
+
+Each refresh runs one `nvidia-smi` query per node over ssh, in parallel. In
+the live view ssh connections are multiplexed (`ControlMaster`), so after the
+first refresh there is no key exchange and no new sshd login on the nodes per
+poll; the masters exit by themselves shortly after you quit. On a 57-node
+cluster a refresh takes about a second of wall time and well under half a
+CPU-second on the login node. The remote query costs each node roughly 0.1 s
+of system time. The refresh interval is clamped to at least 1 s.
+
 ## What counts as busy
 
 A GPU is busy when it uses more than 1 GiB of memory or more than 5%

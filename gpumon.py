@@ -486,7 +486,17 @@ class Poller:
         self.wake.set()
 
 
+def enable_ssh_multiplexing(persist):
+    """Reuse one ssh connection per host across refreshes (no handshake, no sshd login per poll)."""
+    import tempfile
+    d = os.path.join(tempfile.gettempdir(), f"gpumon-{os.getuid()}")
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    SSH_OPTS.extend(["-o", "ControlMaster=auto", "-o", f"ControlPath={d}/%C",
+                     "-o", f"ControlPersist={int(persist)}"])
+
+
 def watch(hosts, args, st):
+    enable_ssh_multiplexing(persist=max(10, args.watch * 3))
     poller = Poller(hosts, args)
     poller.thread.start()
     if not st.on:                                   # piped: just print frames
@@ -546,7 +556,8 @@ def parse_args():
     src.add_argument("-f", "--hosts-file", metavar="FILE", help="use hosts from FILE, ignore the cache")
     src.add_argument("-p", "--pattern", metavar="REGEX",
                      help="only consider hostnames matching REGEX (e.g. 'node\\d+')")
-    p.add_argument("-w", "--watch", type=float, metavar="SEC", help="refresh every SEC seconds in place (q to quit)")
+    p.add_argument("-w", "--watch", type=float, metavar="SEC",
+                   help="live view, refresh every SEC seconds (min 1)")
     p.add_argument("-t", "--timeout", type=int, default=5, help="ssh connect timeout per host (s)")
     p.add_argument("-j", "--jobs", type=int, default=32, help="parallel ssh connections")
     p.add_argument("--gpus", type=int, default=8, metavar="N", help="GPU slots per node (default 8)")
@@ -610,6 +621,8 @@ def main():
     import signal
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     args = parse_args()
+    if args.watch is not None:
+        args.watch = max(1.0, args.watch)
     color = sys.stdout.isatty() and not args.no_color
     st = Style(color, args.theme or (detect_theme() if color else "dark"))
     try:
