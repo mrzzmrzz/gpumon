@@ -6,7 +6,8 @@ One line per node, one circle per GPU:
     ● busy   ○ idle        green = healthy, red = faulty / missing / unreachable
 
 Usage:
-    gpumon              show GPU usage on cached hosts
+    gpumon              live view of the cached hosts (refreshes every 2 s)
+    gpumon --once       print one snapshot and exit (automatic when piped)
     gpumon discover     find passwordless-SSH hosts with GPUs and cache them
     gpumon hosts        print the cached host list
     gpumon deploy       install this script and the host list on every cached host
@@ -616,8 +617,10 @@ def parse_args():
     src.add_argument("-f", "--hosts-file", metavar="FILE", help="use hosts from FILE, ignore the cache")
     src.add_argument("-p", "--pattern", metavar="REGEX",
                      help="only consider hostnames matching REGEX (e.g. 'node\\d+')")
-    p.add_argument("-w", "--watch", type=float, metavar="SEC",
-                   help="live view, refresh every SEC seconds (min 1)")
+    p.add_argument("-w", "--watch", type=float, default=2.0, metavar="SEC",
+                   help="refresh interval for the live view (default 2, min 1)")
+    p.add_argument("-1", "--once", action="store_true",
+                   help="print one snapshot and exit (the default when output is not a terminal)")
     p.add_argument("-t", "--timeout", type=int, default=5, help="ssh connect timeout per host (s)")
     p.add_argument("-j", "--jobs", type=int, default=32, help="parallel ssh connections")
     p.add_argument("--gpus", type=int, default=8, metavar="N", help="GPU slots per node (default 8)")
@@ -681,8 +684,9 @@ def main():
     import signal
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     args = parse_args()
-    if args.watch is not None:
-        args.watch = max(1.0, args.watch)
+    args.watch = max(1.0, args.watch)
+    if args.once or not sys.stdout.isatty():
+        args.watch = None
     color = sys.stdout.isatty() and not args.no_color
     st = Style(color, args.theme or (detect_theme() if color else "dark"))
     try:
