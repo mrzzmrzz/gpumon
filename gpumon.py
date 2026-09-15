@@ -289,7 +289,7 @@ def render(results, st, args, elapsed):
             detail += "  " + "  ".join(notes)
         lines.append(f"  {label}  {' '.join(dots)}   {n_busy}/{slots}  {detail}")
 
-    out = ["\033[2J\033[H"] if args.watch and st.on else []
+    out = []
     stamp = time.strftime("%H:%M:%S")
     out += ["", f"  {st.bold('gpumon')}  {st.dim(f'{len(results)} nodes · {stamp} · {elapsed:.1f}s')}", ""]
     out += ["  " + " " * width + "  " + st.dim(" ".join(str(i % 10) for i in range(slots))), ""]
@@ -302,7 +302,54 @@ def render(results, st, args, elapsed):
     if down:
         summary += f"   {st.bred('✕')} {down} nodes down"
     out += ["", summary, ""]
+    if args.watch and st.on:
+        # redraw in place: home, overwrite each line, wipe whatever is left below
+        return "\033[H" + "\033[K\n".join(out) + "\033[K\033[J"
     return "\n".join(out)
+
+
+# ------------------------------------------------------------------ screen --
+
+class Screen:
+    """Alternate screen buffer with hidden cursor, restored on exit."""
+
+    def __init__(self, enabled):
+        self.on = enabled
+
+    def __enter__(self):
+        if self.on:
+            sys.stdout.write("\033[?1049h\033[?25l\033[H\033[2J")
+            sys.stdout.flush()
+        return self
+
+    def __exit__(self, *exc):
+        if self.on:
+            sys.stdout.write("\033[?25h\033[?1049l")
+            sys.stdout.flush()
+
+
+def wait_or_quit(seconds):
+    """Sleep for `seconds`; return True early if the user presses q."""
+    if not sys.stdin.isatty():
+        time.sleep(seconds)
+        return False
+    import select
+    import termios
+    import tty
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        deadline = time.time() + seconds
+        while True:
+            left = deadline - time.time()
+            if left <= 0:
+                return False
+            r, _, _ = select.select([sys.stdin], [], [], left)
+            if r and sys.stdin.read(1) in ("q", "Q", "\x03"):
+                return True
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
 # ------------------------------------------------------------------- main --
@@ -317,7 +364,7 @@ def parse_args():
     src.add_argument("-f", "--hosts-file", metavar="FILE", help="use hosts from FILE, ignore the cache")
     src.add_argument("-p", "--pattern", metavar="REGEX",
                      help="only consider hostnames matching REGEX (e.g. 'node\\d+')")
-    p.add_argument("-w", "--watch", type=float, metavar="SEC", help="refresh every SEC seconds")
+    p.add_argument("-w", "--watch", type=float, metavar="SEC", help="refresh every SEC seconds in place (q to quit)")
     p.add_argument("-t", "--timeout", type=int, default=5, help="ssh connect timeout per host (s)")
     p.add_argument("-j", "--jobs", type=int, default=32, help="parallel ssh connections")
     p.add_argument("--gpus", type=int, default=8, metavar="N", help="GPU slots per node (default 8)")
@@ -376,6 +423,8 @@ def resolve_hosts(args, st):
 
 
 def main():
+    import signal
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     args = parse_args()
     st = Style(sys.stdout.isatty() and not args.no_color)
     try:
@@ -386,13 +435,18 @@ def main():
         if args.command == "hosts":
             print("\n".join(hosts))
             return
-        while True:
+        if not args.watch:
             t0 = time.time()
             results = parallel(probe_gpus, hosts, args)
             print(render(results, st, args, time.time() - t0), flush=True)
-            if not args.watch:
-                break
-            time.sleep(args.watch)
+            return
+        with Screen(st.on):
+            while True:
+                t0 = time.time()
+                results = parallel(probe_gpus, hosts, args)
+                print(render(results, st, args, time.time() - t0), end="" if st.on else "\n", flush=True)
+                if wait_or_quit(args.watch):
+                    break
     except KeyboardInterrupt:
         print()
 

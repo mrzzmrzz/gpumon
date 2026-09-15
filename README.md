@@ -45,7 +45,7 @@ To update, run the same line again. To remove, delete the file.
 ```sh
 gpumon discover        # find nodes once, cache them
 gpumon                 # show the cluster
-gpumon -w 5            # refresh every 5 seconds
+gpumon -w 5            # live view, redraws in place, q to quit
 gpumon --temps         # add the hottest GPU of each node
 gpumon -a              # number nodes 001, 002, ... instead of hostnames
 gpumon -p 'gpu-\d+'    # only hosts matching a regex
