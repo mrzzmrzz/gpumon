@@ -20,11 +20,15 @@ A minimal cluster GPU overview over SSH. One line per node, one circle per GPU.
 
 | symbol | meaning |
 |---|---|
-| **○** dim green | GPU idle |
-| **●** green | GPU in use, under 50% utilisation |
-| **●** bright green | GPU in use, 50% utilisation or more |
+| **○** dim | GPU idle |
+| **●** pale green | GPU in use, under 50% utilisation |
+| **●** deep green | GPU in use, 50% utilisation or more |
 | **●** red | GPU faulty (no telemetry, uncorrected ECC errors, driver error) |
 | **✕** red | GPU slot missing, or node unreachable |
+
+The two greens are tuned separately for dark and light terminals. The
+background is detected automatically (OSC 11 query, then `COLORFGBG`); force
+it with `--theme dark` or `--theme light`.
 
 Each column is a physical GPU ID, so a broken card shows up in its own slot.
 
@@ -50,6 +54,7 @@ gpumon                 # show the cluster
 gpumon -w 5            # live view: redraws in place, j/k scroll, q quit
 gpumon --temps         # add the hottest GPU of each node
 gpumon -a              # number nodes 001, 002, ... instead of hostnames
+gpumon --theme light   # force the light-background palette
 gpumon -p 'gpu-\d+'    # only hosts matching a regex
 gpumon hosts           # print the cached node list
 ```

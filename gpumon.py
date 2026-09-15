@@ -47,17 +47,26 @@ SKIP_NAMES = {"localhost", "localhost.localdomain", "broadcasthost"}
 
 # ---------------------------------------------------------------- colours --
 
+# busy-GPU greens per terminal background: (pale, deep) 256-colour indices
+PALETTE = {
+    "dark":  ("38;5;194", "1;38;5;28"),    # near-white mint  /  deep forest green
+    "light": ("38;5;157", "1;38;5;22"),    # soft mint        /  very dark green
+}
+
+
 class Style:
-    def __init__(self, enabled):
+    def __init__(self, enabled, theme="dark"):
         self.on = enabled
         term = os.environ.get("TERM", "")
         self.c256 = "256color" in term or "truecolor" in os.environ.get("COLORTERM", "").lower()
+        self.theme = theme
+        self.pale, self.deep = PALETTE[theme]
 
     def _c(self, code, s):
         return f"\033[{code}m{s}\033[0m" if self.on else str(s)
 
-    def green(self, s):  return self._c("38;5;151" if self.c256 else "2;32", s)   # pale
-    def bgreen(self, s): return self._c("1;38;5;34" if self.c256 else "1;92", s)  # deep
+    def green(self, s):  return self._c(self.pale if self.c256 else "2;32", s)
+    def bgreen(self, s): return self._c(self.deep if self.c256 else "1;32", s)
     def idle(self, s):   return self._c("2;32", s)
     def busy(self, util, s):
         return self.bgreen(s) if util >= 50 else self.green(s)
@@ -326,6 +335,44 @@ def render(results, st, args, elapsed, view=None):
     return "\033[H" + "\033[K\n".join(head + page + foot) + "\033[K\033[J", per_page
 
 
+# ------------------------------------------------------------------- theme --
+
+def detect_theme(timeout=0.25):
+    """Return 'dark' or 'light' for the terminal background."""
+    fgbg = os.environ.get("COLORFGBG", "")
+    if ";" in fgbg:
+        bg = fgbg.rsplit(";", 1)[1]
+        if bg.isdigit():
+            return "light" if int(bg) in (7, 15) or int(bg) > 231 else "dark"
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return "dark"
+    import select
+    import termios
+    import tty
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    buf = ""
+    try:
+        tty.setcbreak(fd)
+        sys.stdout.write("\033]11;?\033\\")          # OSC 11: ask for the background colour
+        sys.stdout.flush()
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            r, _, _ = select.select([sys.stdin], [], [], deadline - time.time())
+            if not r:
+                break
+            buf += os.read(fd, 64).decode(errors="ignore")
+            if "\x07" in buf or "\x1b\\" in buf:
+                break
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    m = re.search(r"rgb:([0-9a-fA-F]+)/([0-9a-fA-F]+)/([0-9a-fA-F]+)", buf)
+    if not m:
+        return "dark"
+    r, g, b = (int(h[:2], 16) for h in m.groups())
+    return "light" if 0.299 * r + 0.587 * g + 0.114 * b > 128 else "dark"
+
+
 # ------------------------------------------------------------------ screen --
 
 class Screen:
@@ -403,6 +450,8 @@ def parse_args():
     p.add_argument("--hot", type=int, default=80, help="temperature to highlight (°C)")
     p.add_argument("-a", "--anon", action="store_true",
                    help="number nodes 001, 002, ... instead of showing hostnames")
+    p.add_argument("--theme", choices=["dark", "light"],
+                   help="terminal background (default: auto-detected)")
     p.add_argument("--no-color", action="store_true")
     return p.parse_args()
 
@@ -453,7 +502,8 @@ def main():
     import signal
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     args = parse_args()
-    st = Style(sys.stdout.isatty() and not args.no_color)
+    color = sys.stdout.isatty() and not args.no_color
+    st = Style(color, args.theme or (detect_theme() if color else "dark"))
     try:
         if args.command == "discover":
             discover(args, st)
