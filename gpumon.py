@@ -333,9 +333,76 @@ def render(results, st, args, elapsed, view=None):
 
 
 # ------------------------------------------------------------------- theme --
+# The terminal is asked for its background (OSC 11) and, where supported, told
+# to report colour-scheme changes as they happen (mode 2031 -> CSI ? 997 ; n).
+
+OSC11_QUERY = "\033]11;?\033\\"
+SCHEME_NOTIFY_ON, SCHEME_NOTIFY_OFF = "\033[?2031h", "\033[?2031l"
+THEME_POLL = 5.0            # seconds between background re-queries in watch mode
+
+
+def theme_from_rgb(r, g, b):
+    return "light" if 0.299 * r + 0.587 * g + 0.114 * b > 128 else "dark"
+
+
+class Input:
+    """Reads stdin in raw mode and splits it into key actions and theme reports."""
+
+    KEYS = {"q": "quit", "Q": "quit", "\x03": "quit",
+            "j": "down", "\x1b[B": "down", "k": "up", "\x1b[A": "up",
+            " ": "pagedown", "\x1b[6~": "pagedown", "\x1b[5~": "pageup",
+            "g": "top", "G": "bottom", "r": "refresh"}
+
+    def __init__(self):
+        self.fd = sys.stdin.fileno()
+        self.buf = ""
+
+    def _fill(self, timeout):
+        import select
+        r, _, _ = select.select([self.fd], [], [], timeout)
+        if r:
+            self.buf += os.read(self.fd, 4096).decode(errors="ignore")
+        return bool(r)
+
+    def events(self, timeout):
+        """Wait up to `timeout`; yield ('key', action) / ('theme', name) events."""
+        self._fill(timeout)
+        while self.buf:
+            ev, n = self._parse(self.buf)
+            if n == 0:                                # incomplete sequence: wait briefly for the rest
+                if not self._fill(0.1):
+                    self.buf = ""
+                    return
+                continue
+            self.buf = self.buf[n:]
+            if ev:
+                yield ev
+
+    def _parse(self, b):
+        if b.startswith("\x1b]"):                                  # OSC ... (BEL | ST)
+            m = re.match(r"\x1b\](.*?)(?:\x07|\x1b\\)", b, re.S)
+            if not m:
+                return None, 0
+            rgb = re.match(r"11;rgb:([0-9a-fA-F]+)/([0-9a-fA-F]+)/([0-9a-fA-F]+)", m.group(1))
+            if rgb:
+                return ("theme", theme_from_rgb(*(int(h[:2], 16) for h in rgb.groups()))), m.end()
+            return None, m.end()
+        if b.startswith("\x1b["):                                  # CSI ... final
+            m = re.match(r"\x1b\[[0-9;?]*[@-~]", b)
+            if not m:
+                return None, 0
+            seq = m.group(0)
+            sm = re.match(r"\x1b\[\?997;([12])n", seq)
+            if sm:
+                return ("theme", "dark" if sm.group(1) == "1" else "light"), m.end()
+            return (("key", self.KEYS[seq]) if seq in self.KEYS else None), m.end()
+        if b[0] == "\x1b":
+            return None, 1
+        return (("key", self.KEYS[b[0]]) if b[0] in self.KEYS else None), 1
+
 
 def detect_theme(timeout=1.5):
-    """Return 'dark' or 'light' for the terminal background.
+    """Return 'dark' or 'light' for the terminal background before the UI starts.
 
     The OSC 11 round trip goes through ssh, so allow a generous window;
     it returns as soon as the terminal answers, so a fast link costs nothing."""
@@ -348,31 +415,23 @@ def detect_theme(timeout=1.5):
             return "light" if int(bg) in (7, 15) or int(bg) > 231 else "dark"
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         return "dark"
-    import select
     import termios
     import tty
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
-    buf = ""
     try:
         tty.setcbreak(fd)
-        sys.stdout.write("\033]11;?\033\\")          # OSC 11: ask for the background colour
+        sys.stdout.write(OSC11_QUERY)
         sys.stdout.flush()
+        inp = Input()
         deadline = time.time() + timeout
         while time.time() < deadline:
-            r, _, _ = select.select([sys.stdin], [], [], deadline - time.time())
-            if not r:
-                break
-            buf += os.read(fd, 64).decode(errors="ignore")
-            if "\x07" in buf or "\x1b\\" in buf:
-                break
+            for kind, val in inp.events(deadline - time.time()):
+                if kind == "theme":
+                    return val
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
-    m = re.search(r"rgb:([0-9a-fA-F]+)/([0-9a-fA-F]+)/([0-9a-fA-F]+)", buf)
-    if not m:
-        return "dark"
-    r, g, b = (int(h[:2], 16) for h in m.groups())
-    return "light" if 0.299 * r + 0.587 * g + 0.114 * b > 128 else "dark"
+    return "dark"
 
 
 # ------------------------------------------------------------------ screen --
@@ -391,37 +450,16 @@ class Screen:
             fd = sys.stdin.fileno()
             self.saved = termios.tcgetattr(fd)
             tty.setcbreak(fd)                      # no line buffering, no echo, for the whole session
-            sys.stdout.write("\033[?1049h\033[?25l\033[H\033[2J")
+            sys.stdout.write("\033[?1049h\033[?25l\033[H\033[2J" + SCHEME_NOTIFY_ON)
             sys.stdout.flush()
         return self
 
     def __exit__(self, *exc):
         if self.on:
             import termios
-            sys.stdout.write("\033[?25h\033[?1049l")
+            sys.stdout.write(SCHEME_NOTIFY_OFF + "\033[?25h\033[?1049l")
             sys.stdout.flush()
             termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self.saved)
-
-
-KEYS = {"q": "quit", "Q": "quit", "\x03": "quit",
-        "j": "down", "\x1b[B": "down", "k": "up", "\x1b[A": "up",
-        " ": "pagedown", "\x1b[6~": "pagedown", "\x1b[5~": "pageup",
-        "g": "top", "G": "bottom", "r": "refresh"}
-
-
-def read_key(timeout):
-    """Wait up to `timeout` for a key; return its action name or None."""
-    import select
-    fd = sys.stdin.fileno()
-    r, _, _ = select.select([fd], [], [], timeout)
-    if not r:
-        return None
-    ch = os.read(fd, 1).decode(errors="ignore")
-    if ch == "\x1b":                              # escape sequence: read the rest if it is there
-        r, _, _ = select.select([fd], [], [], 0.05)
-        if r:
-            ch += os.read(fd, 8).decode(errors="ignore")
-    return KEYS.get(ch)
 
 
 class Poller:
@@ -460,29 +498,37 @@ def watch(hosts, args, st):
             time.sleep(0.2)
 
     with Screen(True):
-        offset, seen, size = 0, -1, None
-        while True:
+        inp = Input()
+        fixed = bool(args.theme or os.environ.get("GPUMON_THEME"))
+        offset, seen, size, theme, next_poll, quit_ = 0, -1, None, None, 0.0, False
+        while not quit_:
             now_size = shutil.get_terminal_size()
-            if poller.version != seen or size != now_size:
-                seen, size = poller.version, now_size
+            if poller.version != seen or size != now_size or st.theme != theme:
+                seen, size, theme = poller.version, now_size, st.theme
                 if poller.results:
                     frame, page = render(poller.results, st, args, poller.elapsed, view=(offset, size.lines))
                 else:
                     frame, page = "\033[H\033[2J  " + st.dim("probing…"), 1
                 print(frame, end="", flush=True)
-            key = read_key(0.2)
-            if key is None:
-                continue
-            if key == "quit":
-                break
-            if key == "refresh":
-                poller.refresh_now()
-                continue
-            step = {"down": 1, "up": -1, "pagedown": page, "pageup": -page,
-                    "top": -10 ** 9, "bottom": 10 ** 9}[key]
-            offset = max(0, min(offset + step, max(0, len(poller.results) - page)))
-            frame, page = render(poller.results, st, args, poller.elapsed, view=(offset, size.lines))
-            print(frame, end="", flush=True)
+            if not fixed and time.time() >= next_poll:         # fallback for terminals without mode 2031
+                sys.stdout.write(OSC11_QUERY)
+                sys.stdout.flush()
+                next_poll = time.time() + THEME_POLL
+            for kind, val in inp.events(0.2):
+                if kind == "theme":
+                    if not fixed and val != st.theme:
+                        st = Style(True, val)
+                elif val == "quit":
+                    quit_ = True
+                    break
+                elif val == "refresh":
+                    poller.refresh_now()
+                else:
+                    step = {"down": 1, "up": -1, "pagedown": page, "pageup": -page,
+                            "top": -10 ** 9, "bottom": 10 ** 9}[val]
+                    offset = max(0, min(offset + step, max(0, len(poller.results) - page)))
+                    frame, page = render(poller.results, st, args, poller.elapsed, view=(offset, size.lines))
+                    print(frame, end="", flush=True)
     poller.stop.set()
     poller.refresh_now()
     os._exit(0)                                     # do not wait for in-flight ssh probes

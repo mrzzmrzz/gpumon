@@ -27,10 +27,15 @@ A minimal cluster GPU overview over SSH. One line per node, one circle per GPU.
 | **✕** red | GPU slot missing, or node unreachable |
 
 Busy GPUs use one green hue at two lightness levels: on a dark terminal the
-busier GPU is the brighter one, on a light terminal it is the darker one. The
-background is detected automatically (OSC 11 query, then `COLORFGBG`). If
-your terminal does not answer, set it once with `export GPUMON_THEME=light`
-or pass `--theme light`.
+busier GPU is the brighter one, on a light terminal it is the darker one.
+
+The palette follows the terminal background, live. At start the terminal is
+asked for its background colour (OSC 11). In the live view gpumon also turns
+on colour-scheme notifications (mode 2031, supported by Ghostty, kitty,
+WezTerm, foot, iTerm2 and others), so switching the system theme recolours
+the running view immediately; terminals without that mode are re-asked every
+few seconds. To pin a palette, set `GPUMON_THEME=light` or `dark`, or pass
+`--theme`.
 
 Each column is a physical GPU ID, so a broken card shows up in its own slot.
 
