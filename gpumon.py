@@ -9,6 +9,7 @@ Usage:
     gpumon              show GPU usage on cached hosts
     gpumon discover     find passwordless-SSH hosts with GPUs and cache them
     gpumon hosts        print the cached host list
+    gpumon deploy       install this script and the host list on every cached host
 
 Only hostnames and GPU counters are collected. No users, no processes,
 no IPs, no command lines.
@@ -544,13 +545,72 @@ def watch(hosts, args, st):
     os._exit(0)                                     # do not wait for in-flight ssh probes
 
 
+# ----------------------------------------------------------------- deploy --
+
+DEPLOY_SH = r"""
+set -e
+t=$(mktemp -d); tar -xf - -C "$t"
+d=/usr/local/bin; [ -w "$d" ] || { d="$HOME/.local/bin"; mkdir -p "$d"; }
+install -m 755 "$t/gpumon" "$d/gpumon"
+mkdir -p "$HOME/.cache/gpumon"; cp "$t/hosts" "$HOME/.cache/gpumon/hosts"
+rm -rf "$t"; echo "$d/gpumon"
+"""
+
+
+def deploy_bundle():
+    import io
+    import tarfile
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        tar.add(os.path.abspath(__file__), arcname="gpumon")
+        tar.add(CACHE, arcname="hosts")
+    return buf.getvalue()
+
+
+def deploy_one(host, timeout, bundle):
+    if host in local_names():
+        cmd = ["sh", "-c", DEPLOY_SH]
+    else:
+        import shlex
+        cmd = ["ssh", *SSH_OPTS, "-o", f"ConnectTimeout={timeout}", host, "sh", "-c", shlex.quote(DEPLOY_SH)]
+    try:
+        r = subprocess.run(cmd, input=bundle, capture_output=True, timeout=timeout + 15)
+    except subprocess.TimeoutExpired:
+        return host, None, "timeout"
+    if r.returncode != 0:
+        err = r.stderr.decode(errors="ignore").strip().splitlines()
+        return host, None, (err[-1] if err else f"exit {r.returncode}")[:60]
+    return host, r.stdout.decode().strip(), None
+
+
+def deploy(hosts, args, st):
+    if not os.path.exists(CACHE):
+        sys.exit("gpumon: no host cache to deploy - run `gpumon discover` first")
+    bundle = deploy_bundle()
+    print(f"\n  {st.bold('gpumon deploy')}  {st.dim(f'{len(hosts)} hosts')}\n", flush=True)
+    t0 = time.time()
+    with cf.ThreadPoolExecutor(max_workers=args.jobs) as ex:
+        futs = [ex.submit(deploy_one, h, args.timeout, bundle) for h in hosts]
+        out = {r[0]: r for r in (f.result() for f in cf.as_completed(futs))}
+    ok = 0
+    for h in hosts:
+        _, path, err = out[h]
+        if err:
+            print(f"  {st.bred('✕')} {h}  {st.red(err)}")
+        else:
+            ok += 1
+            print(f"  {st.bgreen('●')} {h}  {st.dim(path)}")
+    print(f"\n  {st.bgreen('●')} {ok} installed   {st.bred('✕')} {len(hosts) - ok} failed   "
+          f"{st.dim(f'{time.time() - t0:.1f}s')}\n")
+
+
 # ------------------------------------------------------------------- main --
 
 def parse_args():
     p = argparse.ArgumentParser(prog="gpumon", description=__doc__.split("\n")[0],
                                 formatter_class=argparse.RawDescriptionHelpFormatter,
                                 epilog=__doc__.split("Usage:")[1])
-    p.add_argument("command", nargs="?", choices=["show", "discover", "hosts"], default="show")
+    p.add_argument("command", nargs="?", choices=["show", "discover", "hosts", "deploy"], default="show")
     src = p.add_argument_group("hosts")
     src.add_argument("-H", "--hosts", nargs="+", metavar="HOST", help="use these hosts, ignore the cache")
     src.add_argument("-f", "--hosts-file", metavar="FILE", help="use hosts from FILE, ignore the cache")
@@ -632,6 +692,9 @@ def main():
         hosts = resolve_hosts(args, st)
         if args.command == "hosts":
             print("\n".join(hosts))
+            return
+        if args.command == "deploy":
+            deploy(hosts, args, st)
             return
         if not args.watch:
             t0 = time.time()

@@ -64,6 +64,7 @@ gpumon -a              # number nodes 001, 002, ... instead of hostnames
 gpumon --theme light   # force the light-background palette
 gpumon -p 'gpu-\d+'    # only hosts matching a regex
 gpumon hosts           # print the cached node list
+gpumon deploy          # install gpumon + the node list on every cached node
 ```
 
 ## Keys in live view
@@ -78,6 +79,18 @@ gpumon hosts           # print the cached node list
 
 Probing runs on a background thread, so keys work at any time, including
 while a refresh is in flight.
+
+## Installing on the whole cluster
+
+```sh
+gpumon deploy
+```
+
+copies the script and the cached host list to every cached node over ssh, in
+parallel. On each node it lands in `/usr/local/bin/gpumon` when that is
+writable, otherwise `~/.local/bin/gpumon`. Nothing is fetched from the
+internet by the nodes. After that `gpumon` works from any node, as long as
+the nodes can ssh to each other without a password.
 
 ## How nodes are discovered
 
