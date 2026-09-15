@@ -1,10 +1,10 @@
 #!/bin/sh
 # Install gpumon as a single executable. Usage:
-#   curl -fsSL https://raw.githubusercontent.com/mrzzmrzz/server-monitor/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/mrzzmrzz/gpumon/main/install.sh | sh
 # Set GPUMON_BIN to change the destination (default ~/.local/bin).
 set -eu
 
-URL="https://raw.githubusercontent.com/mrzzmrzz/server-monitor/main/gpumon.py"
+URL="https://raw.githubusercontent.com/mrzzmrzz/gpumon/main/gpumon.py"
 BIN="${GPUMON_BIN:-$HOME/.local/bin}"
 DEST="$BIN/gpumon"
 

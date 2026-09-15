@@ -44,7 +44,7 @@ Each column is a physical GPU ID, so a broken card shows up in its own slot.
 One line, no clone:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mrzzmrzz/server-monitor/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/mrzzmrzz/gpumon/main/install.sh | sh
 ```
 
 This puts a single executable at `~/.local/bin/gpumon` (set `GPUMON_BIN` to
