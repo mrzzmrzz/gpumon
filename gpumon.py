@@ -19,6 +19,7 @@ import concurrent.futures as cf
 import glob
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -46,34 +47,18 @@ SKIP_NAMES = {"localhost", "localhost.localdomain", "broadcasthost"}
 
 # ---------------------------------------------------------------- colours --
 
-# utilisation ramp: pale -> saturated green. (truecolor rgb, 256-colour fallback)
-RAMP = [((150, 200, 150), 151),
-        ((110, 210, 110), 114),
-        ((70, 220, 70), 77),
-        ((30, 235, 30), 40),
-        ((0, 255, 0), 46)]
-
-
 class Style:
     def __init__(self, enabled):
         self.on = enabled
-        self.truecolor = os.environ.get("COLORTERM", "").lower() in ("truecolor", "24bit")
-
-    def level(self, util, s):
-        """Colour `s` by utilisation 0..100 along the green ramp."""
-        i = min(len(RAMP) - 1, max(0, (util * len(RAMP)) // 101))
-        rgb, idx = RAMP[i]
-        code = "1;38;2;%d;%d;%d" % rgb if self.truecolor else f"1;38;5;{idx}"
-        return self._c(code, s)
-
-    def ramp(self):
-        return " ".join(self.level(u, "●") for u in (0, 25, 50, 75, 100))
 
     def _c(self, code, s):
         return f"\033[{code}m{s}\033[0m" if self.on else str(s)
 
     def green(self, s):  return self._c("32", s)
-    def bgreen(self, s): return self._c("1;32", s)
+    def bgreen(self, s): return self._c("1;92", s)
+    def idle(self, s):   return self._c("2;32", s)
+    def busy(self, util, s):
+        return self.bgreen(s) if util >= 50 else self.green(s)
     def red(self, s):    return self._c("31", s)
     def bred(self, s):   return self._c("1;31", s)
     def yellow(self, s): return self._c("33", s)
@@ -262,7 +247,8 @@ def gb(mib):
     return mib / 1024.0
 
 
-def render(results, st, args, elapsed):
+def render(results, st, args, elapsed, view=None):
+    """Build the frame. `view` = (offset, rows) limits node lines to the terminal."""
     lines = []
     busy = free = bad = missing = down = 0
     names = [f"{i:03d}" for i in range(1, len(results) + 1)] if args.anon else [h for h, _, _ in results]
@@ -293,10 +279,10 @@ def render(results, st, args, elapsed):
                 used_sum += g["used"]; tot_sum += g["total"]; util_sum += g["util"]
                 if g["used"] >= args.mem_threshold or g["util"] >= args.util_threshold:
                     busy += 1; n_busy += 1
-                    dots.append(st.level(g["util"], "●"))
+                    dots.append(st.busy(g["util"], "●"))
                 else:
                     free += 1
-                    dots.append(st.dim(st.green("○")))
+                    dots.append(st.idle("○"))
 
         detail = st.dim(f"{util_sum // n_ok:3d}%  {gb(used_sum):4.0f}/{gb(tot_sum):.0f} GB") if n_ok else ""
         if args.temps:
@@ -308,24 +294,36 @@ def render(results, st, args, elapsed):
             detail += "  " + "  ".join(notes)
         lines.append(f"  {label}  {' '.join(dots)}   {n_busy}/{slots}  {detail}")
 
-    out = []
     stamp = time.strftime("%H:%M:%S")
-    out += ["", f"  {st.bold('gpumon')}  {st.dim(f'{len(results)} nodes · {stamp} · {elapsed:.1f}s')}", ""]
-    out += ["  " + " " * width + "  " + st.dim(" ".join(str(i % 10) for i in range(slots))), ""]
-    out += lines
-    summary = f"  {st.dim(st.green('○'))} {free} free   {st.level(100, '●')} {busy} busy"
+    head = ["", f"  {st.bold('gpumon')}  {st.dim(f'{len(results)} nodes · {stamp} · {elapsed:.1f}s')}", "",
+            "  " + " " * width + "  " + st.dim(" ".join(str(i % 10) for i in range(slots))), ""]
+    summary = f"  {st.idle('○')} {free} free   {st.green('●')} {busy} busy"
     if bad:
         summary += f"   {st.bred('●')} {bad} faulty"
     if missing:
         summary += f"   {st.bred('✕')} {missing} missing"
     if down:
         summary += f"   {st.bred('✕')} {down} nodes down"
-    legend = f"  {st.dim('util')} {st.ramp()} {st.dim('0 → 100%')}"
-    out += ["", summary, legend, ""]
-    if args.watch and st.on:
-        # redraw in place: home, overwrite each line, wipe whatever is left below
-        return "\033[H" + "\033[K\n".join(out) + "\033[K\033[J"
-    return "\n".join(out)
+    legend = f"  {st.idle('○')} idle   {st.green('●')} <50%   {st.bgreen('●')} ≥50%   {st.bred('●')} fault"
+    foot = ["", summary, legend]
+
+    if view is None:
+        return "\n".join(head + lines + foot + [""])
+
+    # watch mode: fit the terminal, scroll the node list, never emit a trailing newline
+    offset, rows = view
+    avail = rows - len(head) - len(foot) - 1
+    if avail < 1:
+        avail = 1
+    if len(lines) > avail:
+        avail -= 1                                   # room for the scroll hint
+        offset = max(0, min(offset, len(lines) - avail))
+        body = lines[offset:offset + avail]
+        above, below = offset, len(lines) - offset - avail
+        body.append(st.dim(f"  ↑ {above}  ↓ {below}   j/k scroll · q quit"))
+    else:
+        body = lines
+    return "\033[H" + "\033[K\n".join(head + body + foot) + "\033[K\033[J"
 
 
 # ------------------------------------------------------------------ screen --
@@ -348,26 +346,35 @@ class Screen:
             sys.stdout.flush()
 
 
-def wait_or_quit(seconds):
-    """Sleep for `seconds`; return True early if the user presses q."""
+def wait_key(seconds):
+    """Sleep up to `seconds`; return 'quit', 'up', 'down', 'top', 'bottom', 'refresh' or None."""
     if not sys.stdin.isatty():
         time.sleep(seconds)
-        return False
+        return None
     import select
     import termios
     import tty
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
+    keys = {"q": "quit", "Q": "quit", "\x03": "quit", "j": "down", "k": "up",
+            "\x1b[B": "down", "\x1b[A": "up", "g": "top", "G": "bottom", "r": "refresh", " ": "refresh"}
     try:
         tty.setcbreak(fd)
         deadline = time.time() + seconds
         while True:
             left = deadline - time.time()
             if left <= 0:
-                return False
+                return None
             r, _, _ = select.select([sys.stdin], [], [], left)
-            if r and sys.stdin.read(1) in ("q", "Q", "\x03"):
-                return True
+            if not r:
+                return None
+            ch = sys.stdin.read(1)
+            if ch == "\x1b":
+                r, _, _ = select.select([sys.stdin], [], [], 0.05)
+                if r:
+                    ch += sys.stdin.read(2)
+            if ch in keys:
+                return keys[ch]
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
@@ -461,12 +468,26 @@ def main():
             print(render(results, st, args, time.time() - t0), flush=True)
             return
         with Screen(st.on):
+            offset = 0
             while True:
                 t0 = time.time()
                 results = parallel(probe_gpus, hosts, args)
-                print(render(results, st, args, time.time() - t0), end="" if st.on else "\n", flush=True)
-                if wait_or_quit(args.watch):
-                    break
+                elapsed = time.time() - t0
+                while True:
+                    if st.on:
+                        rows = shutil.get_terminal_size().lines
+                        frame = render(results, st, args, elapsed, view=(offset, rows))
+                        print(frame, end="", flush=True)
+                    else:
+                        print(render(results, st, args, elapsed), flush=True)
+                    key = wait_key(args.watch)
+                    if key == "quit":
+                        return
+                    if key in (None, "refresh"):
+                        break
+                    step = max(1, rows - 10)
+                    offset = {"up": offset - step, "down": offset + step, "top": 0, "bottom": 10 ** 9}[key]
+                    offset = max(0, offset)
     except KeyboardInterrupt:
         print()
 

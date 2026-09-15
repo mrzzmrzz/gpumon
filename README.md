@@ -15,19 +15,16 @@ A minimal cluster GPU overview over SSH. One line per node, one circle per GPU.
   006  ✕  unreachable
 
   ○ 20 free   ● 27 busy   ● 1 faulty   ✕ 1 nodes down
-  util ● ● ● ● ● 0 → 100%
+  ○ idle   ● <50%   ● ≥50%   ● fault
 ```
 
 | symbol | meaning |
 |---|---|
 | **○** dim green | GPU idle |
-| **●** green | GPU in use, colour follows utilisation: pale = low, saturated = high |
+| **●** green | GPU in use, under 50% utilisation |
+| **●** bright green | GPU in use, 50% utilisation or more |
 | **●** red | GPU faulty (no telemetry, uncorrected ECC errors, driver error) |
 | **✕** red | GPU slot missing, or node unreachable |
-
-The green ramp has five steps from 0% to 100%, shown in the footer. Terminals
-that advertise `COLORTERM=truecolor` get smooth RGB, others fall back to the
-256-colour palette.
 
 Each column is a physical GPU ID, so a broken card shows up in its own slot.
 
@@ -50,7 +47,7 @@ To update, run the same line again. To remove, delete the file.
 ```sh
 gpumon discover        # find nodes once, cache them
 gpumon                 # show the cluster
-gpumon -w 5            # live view, redraws in place, q to quit
+gpumon -w 5            # live view: redraws in place, j/k scroll, q quit
 gpumon --temps         # add the hottest GPU of each node
 gpumon -a              # number nodes 001, 002, ... instead of hostnames
 gpumon -p 'gpu-\d+'    # only hosts matching a regex
