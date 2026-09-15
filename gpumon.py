@@ -50,12 +50,14 @@ SKIP_NAMES = {"localhost", "localhost.localdomain", "broadcasthost"}
 class Style:
     def __init__(self, enabled):
         self.on = enabled
+        term = os.environ.get("TERM", "")
+        self.c256 = "256color" in term or "truecolor" in os.environ.get("COLORTERM", "").lower()
 
     def _c(self, code, s):
         return f"\033[{code}m{s}\033[0m" if self.on else str(s)
 
-    def green(self, s):  return self._c("32", s)
-    def bgreen(self, s): return self._c("1;92", s)
+    def green(self, s):  return self._c("38;5;151" if self.c256 else "2;32", s)   # pale
+    def bgreen(self, s): return self._c("1;38;5;34" if self.c256 else "1;92", s)  # deep
     def idle(self, s):   return self._c("2;32", s)
     def busy(self, util, s):
         return self.bgreen(s) if util >= 50 else self.green(s)
