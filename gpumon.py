@@ -295,8 +295,8 @@ def render(results, st, args, elapsed, view=None):
         lines.append(f"  {label}  {' '.join(dots)}   {n_busy}/{slots}  {detail}")
 
     stamp = time.strftime("%H:%M:%S")
-    head = ["", f"  {st.bold('gpumon')}  {st.dim(f'{len(results)} nodes · {stamp} · {elapsed:.1f}s')}", "",
-            "  " + " " * width + "  " + st.dim(" ".join(str(i % 10) for i in range(slots))), ""]
+    title = f"  {st.bold('gpumon')}  {st.dim(f'{len(results)} nodes · {stamp} · {elapsed:.1f}s')}"
+    colhdr = "  " + " " * width + "  " + st.dim(" ".join(str(i % 10) for i in range(slots)))
     summary = f"  {st.idle('○')} {free} free   {st.green('●')} {busy} busy"
     if bad:
         summary += f"   {st.bred('●')} {bad} faulty"
@@ -305,25 +305,23 @@ def render(results, st, args, elapsed, view=None):
     if down:
         summary += f"   {st.bred('✕')} {down} nodes down"
     legend = f"  {st.idle('○')} idle   {st.green('●')} <50%   {st.bgreen('●')} ≥50%   {st.bred('●')} fault"
-    foot = ["", summary, legend]
+    head, foot = ["", title, ""], ["", summary, legend]
 
+    head = ["", title, "", colhdr, ""]
     if view is None:
         return "\n".join(head + lines + foot + [""])
 
-    # watch mode: fit the terminal, scroll the node list, never emit a trailing newline
+    # watch mode: fit the terminal, page the node list, never emit a trailing newline
     offset, rows = view
-    avail = rows - len(head) - len(foot) - 1
-    if avail < 1:
-        avail = 1
-    if len(lines) > avail:
-        avail -= 1                                   # room for the scroll hint
-        offset = max(0, min(offset, len(lines) - avail))
-        body = lines[offset:offset + avail]
-        above, below = offset, len(lines) - offset - avail
-        body.append(st.dim(f"  ↑ {above}  ↓ {below}   j/k scroll · q quit"))
+    per_page = max(1, rows - len(head) - len(foot))
+    if len(lines) > per_page:
+        per_page = max(1, per_page - 1)                  # room for the scroll hint
+        offset = max(0, min(offset, len(lines) - per_page))
+        page = lines[offset:offset + per_page]
+        page.append(st.dim(f"  ↑ {offset}  ↓ {len(lines) - offset - per_page}   j/k scroll · q quit"))
     else:
-        body = lines
-    return "\033[H" + "\033[K\n".join(head + body + foot) + "\033[K\033[J"
+        page = lines
+    return "\033[H" + "\033[K\n".join(head + page + foot) + "\033[K\033[J", per_page
 
 
 # ------------------------------------------------------------------ screen --
@@ -476,7 +474,7 @@ def main():
                 while True:
                     if st.on:
                         rows = shutil.get_terminal_size().lines
-                        frame = render(results, st, args, elapsed, view=(offset, rows))
+                        frame, step = render(results, st, args, elapsed, view=(offset, rows))
                         print(frame, end="", flush=True)
                     else:
                         print(render(results, st, args, elapsed), flush=True)
@@ -485,7 +483,6 @@ def main():
                         return
                     if key in (None, "refresh"):
                         break
-                    step = max(1, rows - 10)
                     offset = {"up": offset - step, "down": offset + step, "top": 0, "bottom": 10 ** 9}[key]
                     offset = max(0, offset)
     except KeyboardInterrupt:
