@@ -487,12 +487,16 @@ def enable_ssh_multiplexing(persist):
                      "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2"])
 
 
-def close_ssh_masters(hosts, jobs):
-    """Tear down this instance's multiplexed connections and their socket directory."""
+def close_ssh_masters():
+    """Tear down this instance's multiplexed connections and their socket directory, fast."""
     if not MUX_DIR:
         return
-    with cf.ThreadPoolExecutor(max_workers=jobs) as ex:
-        list(ex.map(reset_ssh_master, hosts))
+    import signal
+    for pid in _master_pids(MUX_DIR):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
     import shutil as _sh
     _sh.rmtree(MUX_DIR, ignore_errors=True)
 
