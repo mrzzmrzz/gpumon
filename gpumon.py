@@ -197,7 +197,9 @@ def run_on(host, command, timeout):
     else:
         cmd = ["ssh", *SSH_OPTS, "-o", f"ConnectTimeout={timeout}", host, command]
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 5)
+        # stdin must not be the terminal: ssh would forward our keystrokes to the remote command
+        return subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                              timeout=timeout + 5)
     except subprocess.TimeoutExpired:
         return None
 
@@ -467,28 +469,84 @@ class Screen:
             termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self.saved)
 
 
-MUX_PATH = None
+MUX_DIR = MUX_PATH = None
 
 
 def enable_ssh_multiplexing(persist):
-    """Reuse one ssh connection per host across refreshes (no handshake, no sshd login per poll)."""
-    global MUX_PATH
+    """Reuse one ssh connection per host across refreshes (no handshake, no sshd login per poll).
+
+    Sockets live in a per-process directory so two gpumon instances never share
+    (or reset) each other's connections."""
+    global MUX_DIR, MUX_PATH
     import tempfile
-    d = os.path.join(tempfile.gettempdir(), f"gpumon-{os.getuid()}")
-    os.makedirs(d, mode=0o700, exist_ok=True)
-    MUX_PATH = f"{d}/%C"
+    MUX_DIR = os.path.join(tempfile.gettempdir(), f"gpumon-{os.getuid()}", str(os.getpid()))
+    os.makedirs(MUX_DIR, mode=0o700, exist_ok=True)
+    MUX_PATH = f"{MUX_DIR}/%C"
     SSH_OPTS.extend(["-o", "ControlMaster=auto", "-o", f"ControlPath={MUX_PATH}",
                      "-o", f"ControlPersist={int(persist)}",
                      "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2"])
 
 
-def reset_ssh_master(host):
-    """Drop a host's multiplexed connection so the next probe reconnects from scratch."""
-    if MUX_PATH and host not in local_names():
+def close_ssh_masters(hosts, jobs):
+    """Tear down this instance's multiplexed connections and their socket directory."""
+    if not MUX_DIR:
+        return
+    with cf.ThreadPoolExecutor(max_workers=jobs) as ex:
+        list(ex.map(reset_ssh_master, hosts))
+    import shutil as _sh
+    _sh.rmtree(MUX_DIR, ignore_errors=True)
+
+
+def _control_socket(host):
+    """Resolved ControlPath for `host` (no connection is made)."""
+    r = subprocess.run(["ssh", "-G", "-o", f"ControlPath={MUX_PATH}", host],
+                       stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    for line in r.stdout.splitlines():
+        if line.startswith("controlpath "):
+            return line.split(" ", 1)[1]
+    return None
+
+
+def _master_pids(sock):
+    """PIDs of ssh mux masters serving `sock`, found by command line (a wedged master will not answer)."""
+    pids = []
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
         try:
-            subprocess.run(["ssh", "-O", "exit", "-o", f"ControlPath={MUX_PATH}", host],
-                           capture_output=True, timeout=3)
-        except (OSError, subprocess.TimeoutExpired):
+            with open(f"/proc/{d}/cmdline", "rb") as f:
+                cmd = f.read().replace(b"\0", b" ").decode(errors="ignore")
+        except OSError:
+            continue
+        if cmd.startswith("ssh: ") and sock in cmd and "[mux]" in cmd:
+            pids.append(int(d))
+    return pids
+
+
+def reset_ssh_master(host):
+    """Drop a host's multiplexed connection so the next probe reconnects from scratch.
+
+    Ask the master to exit; if it is wedged and ignores that, kill it and remove
+    its socket, otherwise every later probe would hang on the dead socket."""
+    if not MUX_PATH or host in local_names():
+        return
+    import signal
+    sock = _control_socket(host)
+    try:
+        subprocess.run(["ssh", "-o", f"ControlPath={MUX_PATH}", "-o", "LogLevel=ERROR", "-O", "exit", host],
+                       stdin=subprocess.DEVNULL, capture_output=True, timeout=2)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    if sock:
+        time.sleep(0.1)
+        for pid in _master_pids(sock):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        try:
+            os.unlink(sock)
+        except OSError:
             pass
 
 
@@ -589,7 +647,8 @@ def watch(hosts, args, st):
                     frame, page = render(rows, st, args, status, view=(offset, size.lines))
                     print(frame, end="", flush=True)
     poller.stop.set()
-    os._exit(0)                                     # do not wait for in-flight ssh probes
+    close_ssh_masters(hosts, args.jobs)
+    os._exit(0)                                     # do not wait for in-flight probes                                     # do not wait for in-flight ssh probes
 
 
 # ----------------------------------------------------------------- deploy --
