@@ -612,6 +612,14 @@ def watch(hosts, args, st):
     poller = Poller(hosts, args)
     poller.start()
     status = f"every {args.watch:g}s"
+    try:
+        watch_loop(poller, args, st, status)
+    finally:
+        poller.stop.set()
+        close_ssh_masters()
+
+
+def watch_loop(poller, args, st, status):
     with Screen(True):
         inp = Input()
         fixed = bool(args.theme or os.environ.get("GPUMON_THEME"))
@@ -646,9 +654,6 @@ def watch(hosts, args, st):
                     offset = max(0, min(offset + step, max(0, len(rows) - page)))
                     frame, page = render(rows, st, args, status, view=(offset, size.lines))
                     print(frame, end="", flush=True)
-    poller.stop.set()
-    close_ssh_masters(hosts, args.jobs)
-    os._exit(0)                                     # do not wait for in-flight probes                                     # do not wait for in-flight ssh probes
 
 
 # ----------------------------------------------------------------- deploy --
@@ -813,6 +818,9 @@ def main():
         watch(hosts, args, st)
     except KeyboardInterrupt:
         print()
+    finally:
+        if args.watch:
+            os._exit(0)                              # do not wait for in-flight probes
 
 
 if __name__ == "__main__":
